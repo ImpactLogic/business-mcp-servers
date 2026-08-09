@@ -1,0 +1,9 @@
+# Core - required by every server
+mcp>=1.0.0
+
+# system_info
+psutil>=5.9.0
+
+# clipboard, notes, and document-manager-server are pure standard library.
+# Linux users: clipboard requires xclip or xsel installed via your package
+# manager (e.g. `sudo apt install xclip`).

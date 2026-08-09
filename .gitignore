@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Runtime data - servers default to ~/.local/share/business-mcp/,
+# this guards against an env var pointing them back into the repo.
+*.db
+*.pptx
+*.docx
+
+.DS_Store
