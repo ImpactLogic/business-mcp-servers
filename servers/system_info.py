@@ -13,12 +13,34 @@ Provides system information and monitoring capabilities:
 import datetime
 import os
 import platform
+import re
 import socket
 
 import psutil
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("System Info")
+
+# Environment variables routinely hold credentials. Returning them raw
+# would push API keys, tokens and database passwords straight into the
+# model's context, where they can end up in transcripts or logs. Any
+# variable whose NAME matches this pattern has its VALUE redacted.
+_SECRET_NAME_PATTERN = re.compile(
+    r"(KEY|SECRET|TOKEN|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH|SESSION|COOKIE|"
+    r"PRIVATE|SIGNATURE|SALT|CERT|DSN|CONNECTION_STRING)",
+    re.IGNORECASE,
+)
+
+
+def _redact_env(items):
+    """Redact values of credential-looking environment variables."""
+    out = {}
+    for name, value in items:
+        if _SECRET_NAME_PATTERN.search(name):
+            out[name] = "<redacted>"
+        else:
+            out[name] = value
+    return out
 
 
 @mcp.tool()
@@ -355,19 +377,29 @@ def get_timezone() -> dict:
 @mcp.tool()
 def get_env_variables(limit: int = 10) -> dict:
     """
-    Get environment variables.
+    Get environment variables, with credential-looking values redacted.
+
+    Values are redacted when the variable NAME looks like a secret
+    (contains KEY, SECRET, TOKEN, PASSWORD, AUTH, etc.). Names are
+    always returned so you can see what exists; only the values are
+    hidden. This is a name-based heuristic, not a guarantee — a secret
+    stored in a blandly-named variable will not be caught.
 
     Args:
         limit: Maximum variables to return
 
     Returns:
-        Environment variables
+        Environment variables, secrets redacted
     """
     try:
+        selected = sorted(os.environ.items())[:limit]
+        variables = _redact_env(selected)
         return {
             "success": True,
             "count": len(os.environ),
-            "variables": dict(sorted(os.environ.items())[:limit]),
+            "returned": len(variables),
+            "redacted": sum(1 for v in variables.values() if v == "<redacted>"),
+            "variables": variables,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}

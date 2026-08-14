@@ -89,7 +89,7 @@ def _write_system_clipboard(text: str) -> None:
             subprocess.run(["pbcopy"], input=text, text=True, check=True)
             return
         if system == "Windows":
-            subprocess.run(["clip"], input=text, text=True, check=True, shell=True)
+            subprocess.run(["clip"], input=text, text=True, check=True)
             return
         if system == "Linux":
             for cmd in (["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]):

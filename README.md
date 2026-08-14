@@ -24,6 +24,32 @@ I deleted those 8 and fixed 17 real bugs in the rest.
 **Every server here was verified by running it.** Each section below
 states exactly what was tested and how, so you can re-run it yourself.
 
+**"Verified" meant functionally verified, not security-reviewed** — and
+that distinction turned out to matter. On 2026-08-13 I ran a security
+pass over this repo and found two real vulnerabilities in code that had
+passed every functional check and was already published here:
+
+- **Arbitrary code execution** in `document-manager` — a `.meta.json`
+  sidecar file was `eval()`'d instead of JSON-parsed, so a malicious
+  file placed next to a document would execute on read.
+- **Path traversal** in `notes` — `get_note`, `delete_note` and
+  `add_tags` interpolated the caller-supplied `note_id` straight into a
+  file path, so `../../something` escaped the note store entirely.
+  `delete_note` could delete arbitrary `.json` files on the machine. I
+  confirmed it with a working proof of concept before fixing it.
+
+Both are fixed, and the fixes were verified by re-running the exploits.
+Tightened in the same pass: `system_info.get_env_variables` returned raw
+environment variable values (now redacted — it returned the
+alphabetically first ones, which is exactly where `ANTHROPIC_API_KEY`
+and `AWS_SECRET_ACCESS_KEY` sort), and an unnecessary `shell=True` in
+`clipboard`.
+
+I'm writing this up rather than quietly patching it, because the whole
+argument of this repo is that unverified claims are the problem. "I
+tested that it works" and "I checked that it's safe" are different
+claims, and I had only earned the first one.
+
 This matters more than usual right now. A lot of MCP servers are being
 generated fast and published unrun. Compiling, importing, and registering
 tools are *not* evidence a server works — all three passed on every one of

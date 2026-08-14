@@ -4,6 +4,7 @@ Document Manager MCP Server
 Manages document workflows, file operations, and organization.
 """
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -57,10 +58,10 @@ def upload_document(filepath: str, destination: str = None, tags: list = None) -
         metadata = {
             "tags": tags,
             "source": str(source_path),
-            "uploaded": destination_path,
+            "uploaded": str(destination_path),
         }
         with open(metadata_file, "w") as f:
-            f.write(str(metadata))
+            json.dump(metadata, f)
 
     return {"success": True, "destination": str(destination_path), "tags": tags or []}
 
@@ -150,21 +151,21 @@ def list_documents(
     for file_path in directory_path.rglob("*"):
         if file_path.is_file():
             metadata_file = file_path.with_suffix(".meta.json")
-            tags = None
+            file_tags = None
 
             if metadata_file.exists():
                 try:
                     with open(metadata_file) as f:
-                        metadata = eval(f.read())  # Simple eval for JSON
-                        tags = metadata.get("tags", [])
-                except:
+                        metadata = json.loads(f.read())
+                        file_tags = metadata.get("tags", [])
+                except (json.JSONDecodeError, OSError):
                     pass
 
             # Apply filters
-            file_match = (
-                search not in file_path.name or search.lower() in file_path.name.lower()
+            file_match = search is None or search.lower() in file_path.name.lower()
+            tags_match = tags is None or bool(
+                file_tags and any(t in file_tags for t in tags)
             )
-            tags_match = tags in tags or tags is None
 
             if file_match and tags_match:
                 files.append(
@@ -172,7 +173,7 @@ def list_documents(
                         "path": str(file_path),
                         "name": file_path.name,
                         "size": file_path.stat().st_size,
-                        "tags": tags,
+                        "tags": file_tags,
                     }
                 )
 
@@ -272,8 +273,8 @@ def get_file_metadata(filepath: str) -> dict:
         if metadata_file.exists():
             try:
                 with open(metadata_file) as f:
-                    file_metadata = eval(f.read())
-            except:
+                    file_metadata = json.loads(f.read())
+            except (json.JSONDecodeError, OSError):
                 pass
 
         return {
@@ -301,12 +302,12 @@ if __name__ == "__main__":
         print(f"\n✅ Server: document-manager")
         print(f"✅ Module: document-manager-server")
         print("\nAvailable tools:")
-        print("  - list_files: List files in directory")
-        print("  - upload_document: Upload document to storage")
-        print("  - download_document: Download document")
-        print("  - organize_docs: Organize documents by category")
-        print("  - create_archive: Create archive of documents")
-        print("  - get_file_metadata: Get file metadata")
+        print("  - list_documents: List files in a directory")
+        print("  - upload_document: Copy a file into a destination, with optional tags")
+        print("  - organize_documents: Sort files into category subfolders by extension")
+        print("  - delete_document: Delete a file and its sidecar metadata")
+        print("  - create_archive: Create a tar archive of matching files")
+        print("  - get_file_metadata: Get file stats plus sidecar metadata")
         print("\nFeatures:")
         print("  - File listing and organization")
         print("  - Document upload/download")

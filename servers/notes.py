@@ -5,8 +5,10 @@ Provides note management capabilities:
 - Create/read notes
 - Tag/organize notes
 - Search notes
-- Sync with cloud (OneNote, Evernote style)
 - Export/import notes
+
+All notes are stored as local JSON files under NOTES_STORE. There is no
+cloud sync and no network access of any kind.
 """
 
 import datetime
@@ -19,6 +21,33 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("Notes")
 
 NOTES_STORE = "notes_store"
+
+
+def _note_path(note_id: str) -> Path:
+    """
+    Resolve a note ID to a path inside NOTES_STORE.
+
+    `note_id` arrives from the caller, so it must never be interpolated
+    straight into a path: a value like "../../secrets" would escape the
+    store entirely and let a caller read, overwrite, or delete arbitrary
+    .json files on the machine. Reject separators and traversal, then
+    verify the resolved path really is inside the store.
+
+    Raises ValueError if the ID is unsafe.
+    """
+    if not note_id or note_id in (".", ".."):
+        raise ValueError(f"Invalid note ID: {note_id!r}")
+    if "/" in note_id or "\\" in note_id or "\x00" in note_id:
+        raise ValueError(f"Invalid note ID (path separators not allowed): {note_id!r}")
+
+    store = Path(NOTES_STORE).resolve()
+    candidate = (store / f"{note_id}.json").resolve()
+
+    # Belt and braces: even with separators rejected, confirm containment.
+    if candidate.parent != store:
+        raise ValueError(f"Invalid note ID (escapes note store): {note_id!r}")
+
+    return candidate
 
 
 @mcp.tool()
@@ -86,8 +115,7 @@ def get_note(note_id: str) -> dict:
         Note content
     """
     try:
-        notes_path = Path(NOTES_STORE)
-        note_file = notes_path / f"{note_id}.json"
+        note_file = _note_path(note_id)
 
         if note_file.exists():
             with open(note_file, "r") as f:
@@ -180,8 +208,7 @@ def delete_note(note_id: str) -> dict:
         Deletion confirmation
     """
     try:
-        notes_path = Path(NOTES_STORE)
-        note_file = notes_path / f"{note_id}.json"
+        note_file = _note_path(note_id)
 
         if note_file.exists():
             note_file.unlink()
@@ -257,8 +284,7 @@ def add_tags(note_id: str, tags: list) -> dict:
         Update confirmation
     """
     try:
-        notes_path = Path(NOTES_STORE)
-        note_file = notes_path / f"{note_id}.json"
+        note_file = _note_path(note_id)
 
         if not note_file.exists():
             return {"success": False, "error": f"Note not found: {note_id}"}
