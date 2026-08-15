@@ -17,9 +17,9 @@ import re
 import socket
 
 import psutil
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("System Info")
+mcp = MCPServer("System Info")
 
 # Environment variables routinely hold credentials. Returning them raw
 # would push API keys, tokens and database passwords straight into the
@@ -429,51 +429,4 @@ def get_full_status() -> dict:
 
 
 if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) > 1 and sys.argv[1] == "--test":
-        print("=" * 60)
-        print("SYSTEM INFO MCP SERVER TEST")
-        print("=" * 60)
-        print(f"\n✅ Server: system-info")
-        print(f"✅ Module: system_info")
-        print("\nAvailable tools:")
-        print("  - get_os_info: Get OS details")
-        print("  - get_cpu_info: Get CPU info")
-        print("  - get_memory_info: Get memory info")
-        print("  - get_disk_info: Get disk info")
-        print("  - get_network_info: Get network info")
-        print("  - get_processes: List processes")
-        print("  - get_process_info: Get process details")
-        print("  - get_uptime: Get uptime")
-        print("  - get_load_average: Get load average")
-        print("  - get_sensors: Get hardware sensors")
-        print("  - get_platform_info: Get platform info")
-        print("  - get_timezone: Get timezone")
-        print("  - get_env_variables: Get env vars")
-        print("  - get_full_status: Full system status")
-        print("\nFeatures:")
-        print("  - System monitoring")
-        print("  - Resource utilization")
-        print("  - Process management")
-        print("  - Hardware diagnostics")
-        print("\n✅ All tools are functional")
-        print("=" * 60)
-        sys.exit(0)
-    else:
-        print("System Info MCP Server started")
-        print("Available tools:")
-        print("  - get_os_info: Get OS details")
-        print("  - get_cpu_info: Get CPU info")
-        print("  - get_memory_info: Get memory info")
-        print("  - get_disk_info: Get disk info")
-        print("  - get_network_info: Get network info")
-        print("  - get_processes: List processes")
-        print("  - get_process_info: Get process details")
-        print("  - get_uptime: Get uptime")
-        print("  - get_load_average: Get load average")
-        print("  - get_sensors: Get hardware sensors")
-        print("  - get_platform_info: Get platform info")
-        print("  - get_timezone: Get timezone")
-        print("  - get_env_variables: Get env vars")
-        print("  - get_full_status: Full system status")
+    mcp.run()

@@ -16,9 +16,9 @@ import json
 import os
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("Notes")
+mcp = MCPServer("Notes")
 
 NOTES_STORE = "notes_store"
 
@@ -422,41 +422,4 @@ def import_note(content: str, title: str = None) -> dict:
 
 
 if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) > 1 and sys.argv[1] == "--test":
-        print("=" * 60)
-        print("NOTES MCP SERVER TEST")
-        print("=" * 60)
-        print(f"\n✅ Server: notes")
-        print(f"✅ Module: notes")
-        print("\nAvailable tools:")
-        print("  - create_note: Create a new note")
-        print("  - get_note: Get a note")
-        print("  - list_notes: List notes")
-        print("  - delete_note: Delete a note")
-        print("  - search_notes: Search notes")
-        print("  - add_tags: Add tags to a note")
-        print("  - get_tags: Get all tags")
-        print("  - export_notes: Export notes")
-        print("  - import_note: Import a note")
-        print("\nFeatures:")
-        print("  - Note creation and storage")
-        print("  - Search and filtering")
-        print("  - Tag management")
-        print("  - Import/export functionality")
-        print("\n✅ All tools are functional")
-        print("=" * 60)
-        sys.exit(0)
-    else:
-        print("Notes MCP Server started")
-        print("Available tools:")
-        print("  - create_note: Create a new note")
-        print("  - get_note: Get a note")
-        print("  - list_notes: List notes")
-        print("  - delete_note: Delete a note")
-        print("  - search_notes: Search notes")
-        print("  - add_tags: Add tags to a note")
-        print("  - get_tags: Get all tags")
-        print("  - export_notes: Export notes")
-        print("  - import_note: Import a note")
+    mcp.run()

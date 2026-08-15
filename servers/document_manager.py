@@ -9,9 +9,9 @@ import os
 import shutil
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("Document Manager")
+mcp = MCPServer("Document Manager")
 
 
 @mcp.tool()
@@ -293,29 +293,4 @@ def get_file_metadata(filepath: str) -> dict:
 
 
 if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) > 1 and sys.argv[1] == "--test":
-        print("=" * 60)
-        print("DOCUMENT MANAGER MCP SERVER TEST")
-        print("=" * 60)
-        print(f"\n✅ Server: document-manager")
-        print(f"✅ Module: document-manager-server")
-        print("\nAvailable tools:")
-        print("  - list_documents: List files in a directory")
-        print("  - upload_document: Copy a file into a destination, with optional tags")
-        print("  - organize_documents: Sort files into category subfolders by extension")
-        print("  - delete_document: Delete a file and its sidecar metadata")
-        print("  - create_archive: Create a tar archive of matching files")
-        print("  - get_file_metadata: Get file stats plus sidecar metadata")
-        print("\nFeatures:")
-        print("  - File listing and organization")
-        print("  - Document upload/download")
-        print("  - Archive creation (tar)")
-        print("  - Metadata extraction")
-        print("\n✅ All tools are functional")
-        print("=" * 60)
-        sys.exit(0)
-    else:
-        print("Document Manager MCP Server running")
-        print("Use with: mcp run document_manager-server.py")
+    mcp.run()

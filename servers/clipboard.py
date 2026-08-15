@@ -17,9 +17,9 @@ import re
 import subprocess
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("Clipboard")
+mcp = MCPServer("Clipboard")
 
 # Clipboard history is persisted to a JSON file so entries survive across
 # tool calls and server restarts. Override the location with
@@ -431,44 +431,4 @@ def get_stats() -> dict:
 
 
 if __name__ == "__main__":
-    import sys
-
-    # Handle --test flag
-    if len(sys.argv) > 1 and sys.argv[1] == "--test":
-        print("=" * 60)
-        print("CLIPBOARD MCP SERVER TEST")
-        print("=" * 60)
-        print(f"\n✅ Server: clipboard")
-        print(f"✅ Tools available: 12")
-        print("\nAvailable tools:")
-        print("  - get_clipboard: Get clipboard content")
-        print("  - set_clipboard: Set clipboard")
-        print("  - get_history: Get history")
-        print("  - save_to_history: Save to history")
-        print("  - get_by_label: Get by label")
-        print("  - delete_from_history: Delete entry")
-        print("  - format_text: Format text")
-        print("  - clean_text: Clean text")
-        print("  - find_in_history: Search history")
-        print("  - merge_clips: Merge items")
-        print("  - clear_history: Clear history")
-        print("  - get_stats: Get statistics")
-        print("\n✅ All tools are functional")
-        print("=" * 60)
-        sys.exit(0)
-    else:
-        print("Clipboard MCP Server started")
-        print("Available tools:")
-        print("  - get_clipboard: Get clipboard content")
-        print("  - set_clipboard: Set clipboard")
-        print("  - get_history: Get history")
-        print("  - save_to_history: Save to history")
-        print("  - get_by_label: Get by label")
-        print("  - delete_from_history: Delete entry")
-        print("  - format_text: Format text")
-        print("  - clean_text: Clean text")
-        print("  - find_in_history: Search history")
-        print("  - merge_clips: Merge items")
-        print("  - clear_history: Clear history")
-        print("  - get_stats: Get statistics")
-        print("\nUsage: python -m mcp_servers.clipboard --test")
+    mcp.run()
