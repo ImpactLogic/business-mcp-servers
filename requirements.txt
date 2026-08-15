@@ -1,9 +1,11 @@
-# Core - required by every server
-mcp>=1.0.0
+# Core - required by every server.
+# Pinned to 2.x: mcp 2.0 removed mcp.server.fastmcp, so an unpinned
+# `mcp>=1.0.0` silently resolved to a release these servers cannot import.
+mcp>=2.0.0,<3
 
 # system_info
-psutil>=5.9.0
+psutil>=5.9.0,<8
 
-# clipboard, notes, and document-manager-server are pure standard library.
+# clipboard, notes, and document_manager are pure standard library.
 # Linux users: clipboard requires xclip or xsel installed via your package
 # manager (e.g. `sudo apt install xclip`).

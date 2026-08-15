@@ -17,9 +17,9 @@ import re
 import subprocess
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("Clipboard")
+mcp = MCPServer("Clipboard")
 
 # Clipboard history is persisted to a JSON file so entries survive across
 # tool calls and server restarts. Override the location with
@@ -38,7 +38,7 @@ def _load_history() -> list:
     if not HISTORY_PATH.exists():
         return []
     try:
-        with open(HISTORY_PATH, "r", encoding="utf-8") as f:
+        with open(HISTORY_PATH, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, list) else []
     except (json.JSONDecodeError, OSError):
@@ -63,10 +63,15 @@ def _read_system_clipboard() -> str:
         if system == "Windows":
             return subprocess.run(
                 ["powershell", "-NoProfile", "-Command", "Get-Clipboard"],
-                capture_output=True, text=True, check=True,
+                capture_output=True,
+                text=True,
+                check=True,
             ).stdout.rstrip("\r\n")
         if system == "Linux":
-            for cmd in (["xclip", "-selection", "clipboard", "-o"], ["xsel", "--clipboard", "--output"]):
+            for cmd in (
+                ["xclip", "-selection", "clipboard", "-o"],
+                ["xsel", "--clipboard", "--output"],
+            ):
                 try:
                     return subprocess.run(
                         cmd, capture_output=True, text=True, check=True
@@ -74,7 +79,8 @@ def _read_system_clipboard() -> str:
                 except FileNotFoundError:
                     continue
             raise RuntimeError(
-                "No clipboard tool found. Install xclip or xsel (e.g. `sudo apt install xclip`)."
+                "No clipboard tool found. Install xclip or xsel "
+                "(e.g. `sudo apt install xclip`)."
             )
         raise RuntimeError(f"Unsupported platform: {system}")
     except subprocess.CalledProcessError as e:
@@ -82,24 +88,40 @@ def _read_system_clipboard() -> str:
 
 
 def _write_system_clipboard(text: str) -> None:
-    """Write to the real OS clipboard. Raises RuntimeError if unsupported/unavailable."""
+    """Write to the real OS clipboard.
+
+    Raises RuntimeError if unsupported or unavailable.
+    """
     system = platform.system()
     try:
         if system == "Darwin":
             subprocess.run(["pbcopy"], input=text, text=True, check=True)
             return
         if system == "Windows":
-            subprocess.run(["clip"], input=text, text=True, check=True)
+            # Set-Clipboard rather than clip.exe, to match the PowerShell
+            # Get-Clipboard used for reading; clip.exe mangles non-ASCII.
+            # The text is piped via stdin ($input), never interpolated into
+            # the command string.
+            subprocess.run(
+                ["powershell", "-NoProfile", "-Command", "$input | Set-Clipboard"],
+                input=text,
+                text=True,
+                check=True,
+            )
             return
         if system == "Linux":
-            for cmd in (["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]):
+            for cmd in (
+                ["xclip", "-selection", "clipboard"],
+                ["xsel", "--clipboard", "--input"],
+            ):
                 try:
                     subprocess.run(cmd, input=text, text=True, check=True)
                     return
                 except FileNotFoundError:
                     continue
             raise RuntimeError(
-                "No clipboard tool found. Install xclip or xsel (e.g. `sudo apt install xclip`)."
+                "No clipboard tool found. Install xclip or xsel "
+                "(e.g. `sudo apt install xclip`)."
             )
         raise RuntimeError(f"Unsupported platform: {system}")
     except subprocess.CalledProcessError as e:
@@ -189,9 +211,21 @@ def save_to_history(text: str, label: str = None) -> dict:
     try:
         entries = _load_history()
         now = datetime.datetime.now()
-        # Include microseconds so rapid successive saves get unique ids
+        existing_ids = {e["id"] for e in entries}
+        # Microseconds alone are not enough: Windows' clock resolution is
+        # coarser than a microsecond in practice, so rapid successive saves
+        # collided on the same id and silently overwrote each other on
+        # re-save. A numeric suffix guarantees uniqueness without busy-
+        # waiting on the clock to tick over.
+        base_id = f"clip_{now.strftime('%Y%m%d%H%M%S%f')}"
+        entry_id = base_id
+        suffix = 0
+        while entry_id in existing_ids:
+            suffix += 1
+            entry_id = f"{base_id}_{suffix}"
+
         entry = {
-            "id": f"clip_{now.strftime('%Y%m%d%H%M%S%f')}",
+            "id": entry_id,
             "text": text,
             "label": label or "Untitled",
             "timestamp": now.isoformat(),
@@ -261,6 +295,13 @@ def delete_from_history(entry_id: str) -> dict:
         return {"success": False, "error": str(e)}
 
 
+def _to_markdown(text: str) -> str:
+    """Render text as markdown: first line as a heading, rest as body."""
+    head, _, body = text.partition("\n")
+    heading = f"## {head.strip()}"
+    return f"{heading}\n\n{body.strip()}" if body.strip() else heading
+
+
 @mcp.tool()
 def format_text(text: str, format_type: str = "markdown") -> dict:
     """
@@ -275,7 +316,11 @@ def format_text(text: str, format_type: str = "markdown") -> dict:
     """
     try:
         formats = {
-            "markdown": lambda t: f"## {t[:50]}...",
+            # Heading from the first line, remaining lines kept as body.
+            # This used to be f"## {t[:50]}..." — it truncated at 50
+            # characters and appended an ellipsis even to short strings, so
+            # a formatting tool silently discarded the caller's text.
+            "markdown": _to_markdown,
             "html": lambda t: f"<p>{t}</p>",
             "bold": lambda t: f"<b>{t}</b>",
             "italic": lambda t: f"<i>{t}</i>",
@@ -431,44 +476,4 @@ def get_stats() -> dict:
 
 
 if __name__ == "__main__":
-    import sys
-
-    # Handle --test flag
-    if len(sys.argv) > 1 and sys.argv[1] == "--test":
-        print("=" * 60)
-        print("CLIPBOARD MCP SERVER TEST")
-        print("=" * 60)
-        print(f"\n✅ Server: clipboard")
-        print(f"✅ Tools available: 12")
-        print("\nAvailable tools:")
-        print("  - get_clipboard: Get clipboard content")
-        print("  - set_clipboard: Set clipboard")
-        print("  - get_history: Get history")
-        print("  - save_to_history: Save to history")
-        print("  - get_by_label: Get by label")
-        print("  - delete_from_history: Delete entry")
-        print("  - format_text: Format text")
-        print("  - clean_text: Clean text")
-        print("  - find_in_history: Search history")
-        print("  - merge_clips: Merge items")
-        print("  - clear_history: Clear history")
-        print("  - get_stats: Get statistics")
-        print("\n✅ All tools are functional")
-        print("=" * 60)
-        sys.exit(0)
-    else:
-        print("Clipboard MCP Server started")
-        print("Available tools:")
-        print("  - get_clipboard: Get clipboard content")
-        print("  - set_clipboard: Set clipboard")
-        print("  - get_history: Get history")
-        print("  - save_to_history: Save to history")
-        print("  - get_by_label: Get by label")
-        print("  - delete_from_history: Delete entry")
-        print("  - format_text: Format text")
-        print("  - clean_text: Clean text")
-        print("  - find_in_history: Search history")
-        print("  - merge_clips: Merge items")
-        print("  - clear_history: Clear history")
-        print("  - get_stats: Get statistics")
-        print("\nUsage: python -m mcp_servers.clipboard --test")
+    mcp.run()

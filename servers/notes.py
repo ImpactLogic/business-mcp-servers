@@ -16,11 +16,68 @@ import json
 import os
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("Notes")
+mcp = MCPServer("Notes")
 
-NOTES_STORE = "notes_store"
+# Notes are persisted one JSON file per note. Override the directory with
+# NOTES_STORE_PATH; defaults under the user's home directory. This must not
+# be a bare relative path: the server's working directory is chosen by
+# whatever launches it (Claude Desktop picks an arbitrary one), so a
+# relative path scatters notes wherever the process happens to start —
+# including inside this repo.
+NOTES_STORE = Path(
+    os.environ.get(
+        "NOTES_STORE_PATH",
+        Path.home() / ".local" / "share" / "business-mcp" / "notes",
+    )
+)
+
+
+def _store_dir() -> Path:
+    """Return the note store directory, creating it if needed."""
+    NOTES_STORE.mkdir(parents=True, exist_ok=True)
+    return NOTES_STORE
+
+
+def _new_note_id(prefix: str) -> str:
+    """
+    Mint a note ID that is not already taken.
+
+    Second-resolution timestamps are not enough: two notes created in the
+    same second produced the same ID, and the second silently overwrote the
+    first. Microseconds make that vanishingly unlikely, and the existence
+    check makes it impossible.
+    """
+    store = _store_dir()
+    while True:
+        candidate = f"{prefix}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+        if not (store / f"{candidate}.json").exists():
+            return candidate
+
+
+def _notes_to_markdown(notes: list, include_meta: bool = True) -> str:
+    """Render notes as a single markdown document."""
+    blocks = []
+    for note in notes:
+        lines = [f"# {note.get('title', 'Untitled')}", ""]
+        if include_meta:
+            meta = []
+            if note.get("created_at"):
+                meta.append(f"created: {note['created_at']}")
+            if note.get("updated_at"):
+                meta.append(f"updated: {note['updated_at']}")
+            if note.get("priority"):
+                meta.append(f"priority: {note['priority']}")
+            if note.get("project"):
+                meta.append(f"project: {note['project']}")
+            if note.get("tags"):
+                meta.append("tags: " + ", ".join(note["tags"]))
+            if meta:
+                lines += ["  \n".join(f"*{m}*" for m in meta), ""]
+        lines.append(note.get("content", ""))
+        blocks.append("\n".join(lines).rstrip())
+    return "\n\n---\n\n".join(blocks)
 
 
 def _note_path(note_id: str) -> Path:
@@ -40,7 +97,7 @@ def _note_path(note_id: str) -> Path:
     if "/" in note_id or "\\" in note_id or "\x00" in note_id:
         raise ValueError(f"Invalid note ID (path separators not allowed): {note_id!r}")
 
-    store = Path(NOTES_STORE).resolve()
+    store = _store_dir().resolve()
     candidate = (store / f"{note_id}.json").resolve()
 
     # Belt and braces: even with separators rejected, confirm containment.
@@ -72,7 +129,7 @@ def create_note(
         Note ID and creation confirmation
     """
     try:
-        note_id = f"note_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+        note_id = _new_note_id("note")
 
         note = {
             "id": note_id,
@@ -86,8 +143,7 @@ def create_note(
         }
 
         # Save note
-        notes_path = Path(NOTES_STORE)
-        notes_path.mkdir(exist_ok=True)
+        notes_path = _store_dir()
 
         with open(notes_path / f"{note_id}.json", "w") as f:
             json.dump(note, f)
@@ -118,7 +174,7 @@ def get_note(note_id: str) -> dict:
         note_file = _note_path(note_id)
 
         if note_file.exists():
-            with open(note_file, "r") as f:
+            with open(note_file) as f:
                 note = json.load(f)
 
             return {"success": True, "note_id": note_id, "note": note}
@@ -150,13 +206,13 @@ def list_notes(
         List of notes
     """
     try:
-        notes_path = Path(NOTES_STORE)
+        notes_path = NOTES_STORE
         notes = []
 
         if notes_path.exists():
             for note_file in notes_path.glob("*.json"):
                 try:
-                    with open(note_file, "r") as f:
+                    with open(note_file) as f:
                         note = json.load(f)
 
                     # Apply filters
@@ -168,13 +224,11 @@ def list_notes(
                         continue
 
                     notes.append(note)
-
-                    if len(notes) >= limit:
-                        break
-                except:
+                except (OSError, json.JSONDecodeError):
                     continue
 
-        # Sort
+        # Sort before applying `limit`. Truncating first would mean `sort_by`
+        # only ordered an arbitrary first-N slice of whatever glob() returned.
         sort_keys = {
             "created_at": "created_at",
             "updated_at": "updated_at",
@@ -183,6 +237,9 @@ def list_notes(
 
         if sort_by in sort_keys:
             notes.sort(key=lambda x: x.get(sort_keys[sort_by], ""), reverse=True)
+
+        if limit is not None:
+            notes = notes[:limit]
 
         return {
             "success": True,
@@ -239,13 +296,13 @@ def search_notes(query: str, search_fields: list = None, limit: int = 10) -> dic
     """
     try:
         search_fields = search_fields or ["title", "content", "tags"]
-        notes_path = Path(NOTES_STORE)
+        notes_path = NOTES_STORE
         results = []
 
         if notes_path.exists():
             for note_file in notes_path.glob("*.json"):
                 try:
-                    with open(note_file, "r") as f:
+                    with open(note_file) as f:
                         note = json.load(f)
 
                     # Search in specified fields
@@ -257,7 +314,7 @@ def search_notes(query: str, search_fields: list = None, limit: int = 10) -> dic
 
                     if len(results) >= limit:
                         break
-                except:
+                except (OSError, json.JSONDecodeError):
                     continue
 
         return {
@@ -289,11 +346,16 @@ def add_tags(note_id: str, tags: list) -> dict:
         if not note_file.exists():
             return {"success": False, "error": f"Note not found: {note_id}"}
 
-        with open(note_file, "r") as f:
+        with open(note_file) as f:
             note = json.load(f)
 
-        # Add tags
-        note.get("tags", []).extend(tags)
+        # setdefault, not get: `note.get("tags", []).extend(...)` would mutate
+        # a throwaway list for any note on disk without a "tags" key, silently
+        # dropping the tags while still reporting success.
+        existing = note.setdefault("tags", [])
+        for tag in tags:
+            if tag not in existing:
+                existing.append(tag)
         note["updated_at"] = datetime.datetime.now().isoformat()
 
         with open(note_file, "w") as f:
@@ -318,18 +380,18 @@ def get_tags() -> dict:
         List of tags with counts
     """
     try:
-        notes_path = Path(NOTES_STORE)
+        notes_path = NOTES_STORE
         tags = {}
 
         if notes_path.exists():
             for note_file in notes_path.glob("*.json"):
                 try:
-                    with open(note_file, "r") as f:
+                    with open(note_file) as f:
                         note = json.load(f)
 
                     for tag in note.get("tags", []):
                         tags[tag] = tags.get(tag, 0) + 1
-                except:
+                except (OSError, json.JSONDecodeError):
                     continue
 
         return {
@@ -355,19 +417,36 @@ def export_notes(
     Returns:
         Exported notes
     """
+    if format not in ("json", "markdown"):
+        return {"success": False, "error": f"Unsupported format: {format}"}
+
     try:
-        notes_path = Path(NOTES_STORE)
+        # Resolve the set of note files to export. Caller-supplied IDs go
+        # through _note_path so an export cannot be used to read files
+        # outside the store; with no IDs, export everything.
+        if note_ids:
+            note_files = []
+            for note_id in note_ids:
+                path = _note_path(note_id)
+                if not path.exists():
+                    return {"success": False, "error": f"Note not found: {note_id}"}
+                note_files.append(path)
+        else:
+            note_files = sorted(NOTES_STORE.glob("*.json"))
+
+        notes_data = []
+        for note_file in note_files:
+            try:
+                with open(note_file) as f:
+                    notes_data.append(json.load(f))
+            except (OSError, json.JSONDecodeError):
+                continue
+
+        if not include_meta:
+            keep = {"id", "title", "content", "tags"}
+            notes_data = [{k: v for k, v in n.items() if k in keep} for n in notes_data]
 
         if format == "json":
-            notes_data = []
-            for note_id in note_ids or notes_path.glob("*.json"):
-                try:
-                    note_id = note_id.stem
-                    with open(note_file, "r") as f:
-                        notes_data.append(json.load(f))
-                except:
-                    continue
-
             return {
                 "success": True,
                 "format": "json",
@@ -375,11 +454,15 @@ def export_notes(
                 "notes": notes_data,
             }
 
-        elif format == "markdown":
-            # Convert to markdown
-            return {"success": True, "format": "markdown", "notes": []}
-
-        return {"success": False, "error": f"Unsupported format: {format}"}
+        return {
+            "success": True,
+            "format": "markdown",
+            "count": len(notes_data),
+            "markdown": _notes_to_markdown(notes_data, include_meta=include_meta),
+            "notes": notes_data,
+        }
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -397,7 +480,7 @@ def import_note(content: str, title: str = None) -> dict:
         Import confirmation
     """
     try:
-        note_id = f"imported_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+        note_id = _new_note_id("imported")
 
         note = {
             "id": note_id,
@@ -410,8 +493,7 @@ def import_note(content: str, title: str = None) -> dict:
             "project": None,
         }
 
-        notes_path = Path(NOTES_STORE)
-        notes_path.mkdir(exist_ok=True)
+        notes_path = _store_dir()
 
         with open(notes_path / f"{note_id}.json", "w") as f:
             json.dump(note, f)
@@ -422,41 +504,4 @@ def import_note(content: str, title: str = None) -> dict:
 
 
 if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) > 1 and sys.argv[1] == "--test":
-        print("=" * 60)
-        print("NOTES MCP SERVER TEST")
-        print("=" * 60)
-        print(f"\n✅ Server: notes")
-        print(f"✅ Module: notes")
-        print("\nAvailable tools:")
-        print("  - create_note: Create a new note")
-        print("  - get_note: Get a note")
-        print("  - list_notes: List notes")
-        print("  - delete_note: Delete a note")
-        print("  - search_notes: Search notes")
-        print("  - add_tags: Add tags to a note")
-        print("  - get_tags: Get all tags")
-        print("  - export_notes: Export notes")
-        print("  - import_note: Import a note")
-        print("\nFeatures:")
-        print("  - Note creation and storage")
-        print("  - Search and filtering")
-        print("  - Tag management")
-        print("  - Import/export functionality")
-        print("\n✅ All tools are functional")
-        print("=" * 60)
-        sys.exit(0)
-    else:
-        print("Notes MCP Server started")
-        print("Available tools:")
-        print("  - create_note: Create a new note")
-        print("  - get_note: Get a note")
-        print("  - list_notes: List notes")
-        print("  - delete_note: Delete a note")
-        print("  - search_notes: Search notes")
-        print("  - add_tags: Add tags to a note")
-        print("  - get_tags: Get all tags")
-        print("  - export_notes: Export notes")
-        print("  - import_note: Import a note")
+    mcp.run()

@@ -1,0 +1,19 @@
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP"]
+
+# E722 (bare `except:`) is deliberately NOT ignored. Bare excepts are what
+# turned crashes in this repo into confident empty results — a tool reporting
+# success while returning nothing. That is the exact failure mode this project
+# exists to argue against, so the linter should refuse it.
+#
+# `except Exception` returning {"success": False, "error": ...} is a different
+# thing and is the intended pattern: an MCP tool must report a failure to the
+# caller rather than take the whole server down. That is why BLE001 is not
+# enabled.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
