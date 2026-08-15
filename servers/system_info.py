@@ -15,6 +15,7 @@ import os
 import platform
 import re
 import socket
+import time
 
 import psutil
 from mcp.server.mcpserver import MCPServer
@@ -74,20 +75,20 @@ def get_cpu_info() -> dict:
         CPU details
     """
     try:
+        # Sample percpu once and reuse: calling cpu_percent() per core meant
+        # N full samples per request, and cpu_freq() was called twice.
+        per_core = psutil.cpu_percent(percpu=True, interval=None)
+        freq = psutil.cpu_freq()
+
         return {
             "success": True,
             "cpu_count": psutil.cpu_count(),
+            "cpu_count_physical": psutil.cpu_count(logical=False),
             "cpu_percent": psutil.cpu_percent(interval=None),
             "cores": [
-                {
-                    "number": i,
-                    "percent": psutil.cpu_percent(percpu=True, interval=None)[i],
-                }
-                for i in range(psutil.cpu_count())
+                {"number": i, "percent": percent} for i, percent in enumerate(per_core)
             ],
-            "frequency": psutil.cpu_freq()._asdict()
-            if hasattr(psutil.cpu_freq(), "_asdict")
-            else None,
+            "frequency": freq._asdict() if freq else None,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -128,20 +129,31 @@ def get_disk_info() -> dict:
         Disk details
     """
     try:
+        # disk_partitions() yields sdiskpart(device, mountpoint, fstype, opts)
+        # — it carries no usage figures. Usage comes from disk_usage() per
+        # mountpoint, which can fail on unreadable or disconnected mounts.
+        disks = []
+        for mount in psutil.disk_partitions():
+            entry = {
+                "device": mount.device,
+                "mountpoint": mount.mountpoint,
+                "fstype": mount.fstype,
+            }
+            try:
+                usage = psutil.disk_usage(mount.mountpoint)
+                entry.update(
+                    total=usage.total,
+                    used=usage.used,
+                    free=usage.free,
+                    percent=usage.percent,
+                )
+            except (PermissionError, OSError) as e:
+                entry["error"] = str(e)
+            disks.append(entry)
+
         return {
             "success": True,
-            "disks": [
-                {
-                    "device": mount.device,
-                    "mountpoint": mount.mountpoint,
-                    "fstype": mount.fstype,
-                    "total": mount.total,
-                    "used": mount.used,
-                    "free": mount.free,
-                    "percent": mount.percent,
-                }
-                for mount in psutil.disk_partitions()
-            ],
+            "disks": disks,
             "virtual": {
                 "total": psutil.disk_usage("/").total,
                 "used": psutil.disk_usage("/").used,
@@ -153,6 +165,17 @@ def get_disk_info() -> dict:
         return {"success": False, "error": str(e)}
 
 
+def _address_family(family) -> str:
+    """Human-readable name for a socket address family."""
+    if family == socket.AF_INET:
+        return "IPv4"
+    if family == socket.AF_INET6:
+        return "IPv6"
+    if hasattr(psutil, "AF_LINK") and family == psutil.AF_LINK:
+        return "MAC"
+    return str(family)
+
+
 @mcp.tool()
 def get_network_info() -> dict:
     """
@@ -162,27 +185,51 @@ def get_network_info() -> dict:
         Network details
     """
     try:
-        return {
-            "success": True,
-            "hostname": socket.gethostname(),
-            "host_name": socket.gethostbyname(socket.gethostname()),
-            "interfaces": [
+        hostname = socket.gethostname()
+        try:
+            host_ip = socket.gethostbyname(hostname)
+        except OSError:
+            host_ip = None
+
+        # net_if_addrs()/net_if_stats() are dicts keyed by interface name.
+        # Iterating one yields str keys, so the addresses have to be joined
+        # from net_if_addrs() rather than subscripted off the stats entry.
+        stats = psutil.net_if_stats()
+        interfaces = []
+        for name, addrs in psutil.net_if_addrs().items():
+            stat = stats.get(name)
+            interfaces.append(
                 {
-                    "name": interface["ifname"],
+                    "name": name,
                     "addresses": [
                         {
-                            "address": addr["address"],
-                            "family": "IPv4"
-                            if addr["family"] == socket.AF_INET
-                            else "IPv6",
+                            "address": addr.address,
+                            "family": _address_family(addr.family),
+                            "netmask": addr.netmask,
                         }
-                        for addr in interface.get("addrs", [])
+                        for addr in addrs
                     ],
-                    "status": interface.get("status", "up"),
+                    "status": "up" if stat and stat.isup else "down",
+                    "speed_mbps": stat.speed if stat else None,
                 }
-                for interface in psutil.net_if_stats()
-            ],
-            "connections": psutil.net_connections()[:10],
+            )
+
+        # net_connections() yields namedtuples, which are not JSON
+        # serializable, and needs elevated privileges on macOS.
+        try:
+            connections = [c._asdict() for c in psutil.net_connections()[:10]]
+            for conn in connections:
+                conn["laddr"] = tuple(conn["laddr"]) or None
+                conn["raddr"] = tuple(conn["raddr"]) or None
+        except (psutil.AccessDenied, PermissionError):
+            connections = None
+
+        return {
+            "success": True,
+            "hostname": hostname,
+            "host_name": host_ip,
+            "interfaces": interfaces,
+            "connections": connections,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -265,7 +312,9 @@ def get_uptime() -> dict:
             "success": True,
             "boot_time": boot_time.isoformat(),
             "uptime": str(uptime),
-            "uptime_seconds": uptime.seconds,
+            # total_seconds(), not .seconds — the latter is the remainder
+            # after whole days, so it wrapped to ~0 once a day.
+            "uptime_seconds": uptime.total_seconds(),
             "days": uptime.days,
         }
     except Exception as e:
@@ -306,20 +355,41 @@ def get_sensors() -> dict:
     try:
         sensors = {}
 
-        try:
-            # Get thermal zones (Linux only)
-            sensors["thermal"] = []
-            for thermal_zone in psutil.sensors_temperatures():
-                for name, entry in thermal_zone.items():
-                    sensors["thermal"].append(
+        # sensors_temperatures() returns {chip_name: [shwtemp, ...]}, so it
+        # must be walked with .items() — iterating it yields str keys, and
+        # the resulting TypeError used to be swallowed into an empty list.
+        # It is absent entirely on macOS and Windows, which is reported as
+        # `supported: False` rather than as an empty reading.
+        if hasattr(psutil, "sensors_temperatures"):
+            thermal = []
+            for chip, entries in psutil.sensors_temperatures().items():
+                for entry in entries:
+                    thermal.append(
                         {
-                            "name": name,
-                            "current": entry[0]["current"],
-                            "high": entry[0]["high"],
+                            "chip": chip,
+                            "label": entry.label or chip,
+                            "current": entry.current,
+                            "high": entry.high,
+                            "critical": entry.critical,
                         }
                     )
-        except:
+            sensors["thermal"] = thermal
+            sensors["thermal_supported"] = True
+        else:
             sensors["thermal"] = []
+            sensors["thermal_supported"] = False
+
+        if hasattr(psutil, "sensors_fans"):
+            sensors["fans"] = [
+                {"chip": chip, "label": entry.label or chip, "rpm": entry.current}
+                for chip, entries in psutil.sensors_fans().items()
+                for entry in entries
+            ]
+        else:
+            sensors["fans"] = []
+
+        battery = getattr(psutil, "sensors_battery", lambda: None)()
+        sensors["battery"] = battery._asdict() if battery else None
 
         return {"success": True, "sensors": sensors}
     except Exception as e:
@@ -362,11 +432,20 @@ def get_timezone() -> dict:
     try:
         tz = datetime.datetime.now(datetime.timezone.utc).astimezone()
 
+        # astimezone() with no argument attaches a *fixed-offset* tzinfo, so
+        # its .dst() is always None — it cannot answer the DST question at
+        # all. Calling .total_seconds() on it unguarded used to raise, which
+        # made this tool fail on every machine. time.localtime().tm_isdst is
+        # the platform's real answer, so use that instead.
+        offset = tz.utcoffset()
+        is_dst = time.localtime().tm_isdst
+
         return {
             "success": True,
             "timezone": tz.tzname(),
-            "utc_offset": tz.utcoffset().total_seconds() / 3600,
-            "dst": tz.dst().total_seconds() != 0,
+            "utc_offset": offset.total_seconds() / 3600 if offset else 0.0,
+            "dst": is_dst > 0,
+            "dst_known": is_dst >= 0,
             "zoneinfo": tz.tzname(),
             "timestamp": datetime.datetime.now().isoformat(),
         }

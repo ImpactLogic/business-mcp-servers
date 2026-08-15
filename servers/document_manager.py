@@ -14,6 +14,41 @@ from mcp.server.mcpserver import MCPServer
 mcp = MCPServer("Document Manager")
 
 
+def _meta_path(path: Path) -> Path:
+    """
+    Sidecar metadata path for a document.
+
+    Appends to the full filename rather than using with_suffix(): the latter
+    maps report.pdf and report.txt onto the same report.meta.json, so one
+    file's metadata would overwrite another's — and delete_document would
+    remove a sidecar belonging to a different file.
+    """
+    return path.with_name(path.name + ".meta.json")
+
+
+def _is_meta(path: Path) -> bool:
+    """True if this path is a sidecar rather than a document."""
+    return path.name.endswith(".meta.json")
+
+
+def _category_for(path: Path, rules: dict) -> str:
+    """
+    Pick the destination category for a file.
+
+    Returns the default when no rule matches. The previous implementation
+    unpacked rules.items() into the same name that held the default, so an
+    unmatched file was filed under whichever category happened to come last.
+    """
+    if not rules:
+        return "documents"
+    extension = path.suffix.lower()
+    for ext, category in rules.items():
+        ext = ext.lower()
+        if extension == ext or extension == f".{ext.lstrip('.')}":
+            return category
+    return "documents"
+
+
 @mcp.tool()
 def upload_document(filepath: str, destination: str = None, tags: list = None) -> dict:
     """
@@ -54,7 +89,7 @@ def upload_document(filepath: str, destination: str = None, tags: list = None) -
 
     # Add tags as metadata (stored in sidecar file)
     if tags:
-        metadata_file = destination_path.with_suffix(".meta.json")
+        metadata_file = _meta_path(destination_path)
         metadata = {
             "tags": tags,
             "source": str(source_path),
@@ -68,15 +103,21 @@ def upload_document(filepath: str, destination: str = None, tags: list = None) -
 
 @mcp.tool()
 def organize_documents(
-    source_dir: str, destination_dir: str, rules: dict = None
+    source_dir: str, destination_dir: str, rules: dict = None, dry_run: bool = True
 ) -> dict:
     """
     Organize documents into categories.
 
+    This MOVES files. It previews by default: `dry_run=True` reports the
+    moves it would make and touches nothing. Pass `dry_run=False` to
+    actually move files.
+
     Args:
         source_dir: Source directory to scan
         destination_dir: Destination directory for organized files
-        rules: Organization rules (e.g., {"pdf": "documents", "docx": "documents"})
+        rules: Organization rules (e.g., {"pdf": "documents", "docx": "documents"}).
+            Files matching no rule go to "documents".
+        dry_run: Preview only. Defaults to True; set False to move files.
 
     Returns:
         dict with organization results
@@ -87,40 +128,41 @@ def organize_documents(
     if not source_path.exists():
         return {"success": False, "error": f"Source directory not found: {source_dir}"}
 
-    # Create destination
-    dest_path.mkdir(parents=True, exist_ok=True)
+    if not dry_run:
+        dest_path.mkdir(parents=True, exist_ok=True)
 
-    results = {"moved": 0, "skipped": 0, "files": []}
+    results = {
+        "success": True,
+        "dry_run": dry_run,
+        "moved": 0,
+        "skipped": 0,
+        "files": [],
+    }
 
-    # Scan files
-    for file_path in source_path.iterdir():
-        if file_path.is_file():
-            # Apply rules
-            category = "documents"  # default
-            if rules:
-                extension = file_path.suffix.lower()
-                for ext, category in rules.items():
-                    if ext in extension or extension == ext:
-                        break
+    for file_path in sorted(source_path.iterdir()):
+        if not file_path.is_file() or _is_meta(file_path):
+            continue
 
-            # Create category directory
-            category_dir = dest_path / category
+        category = _category_for(file_path, rules)
+        category_dir = dest_path / category
+        dest_file = category_dir / file_path.name
+
+        if dest_file.exists():
+            results["skipped"] += 1
+            continue
+
+        if not dry_run:
             category_dir.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(file_path), str(dest_file))
 
-            # Move file
-            dest_file = category_dir / file_path.name
-            if not dest_file.exists():
-                shutil.move(str(file_path), str(dest_file))
-                results["moved"] += 1
-                results["files"].append(
-                    {
-                        "source": str(file_path),
-                        "destination": str(dest_file),
-                        "category": category,
-                    }
-                )
-            else:
-                results["skipped"] += 1
+        results["moved"] += 1
+        results["files"].append(
+            {
+                "source": str(file_path),
+                "destination": str(dest_file),
+                "category": category,
+            }
+        )
 
     return results
 
@@ -148,9 +190,10 @@ def list_documents(
     files = []
 
     # Scan directory
-    for file_path in directory_path.rglob("*"):
-        if file_path.is_file():
-            metadata_file = file_path.with_suffix(".meta.json")
+    for file_path in sorted(directory_path.rglob("*")):
+        # Sidecars describe documents; they are not documents themselves.
+        if file_path.is_file() and not _is_meta(file_path):
+            metadata_file = _meta_path(file_path)
             file_tags = None
 
             if metadata_file.exists():
@@ -201,7 +244,7 @@ def delete_document(filepath: str) -> dict:
         source_path.unlink()
 
         # Delete metadata file if exists
-        metadata_file = source_path.with_suffix(".meta.json")
+        metadata_file = _meta_path(source_path)
         if metadata_file.exists():
             metadata_file.unlink()
 
@@ -267,7 +310,7 @@ def get_file_metadata(filepath: str) -> dict:
         stat = source_path.stat()
 
         # Try to read metadata file
-        metadata_file = source_path.with_suffix(".meta.json")
+        metadata_file = _meta_path(source_path)
         file_metadata = {}
 
         if metadata_file.exists():
@@ -284,7 +327,7 @@ def get_file_metadata(filepath: str) -> dict:
                 "size": stat.st_size,
                 "created": source_path.stat().st_ctime,
                 "modified": source_path.stat().st_mtime,
-                "parent": source_path.parent,
+                "parent": str(source_path.parent),
                 "file_metadata": file_metadata,
             },
         }
