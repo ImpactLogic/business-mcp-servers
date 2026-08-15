@@ -50,6 +50,75 @@ argument of this repo is that unverified claims are the problem. "I
 tested that it works" and "I checked that it's safe" are different
 claims, and I had only earned the first one.
 
+### 2026-08-15: none of it ran
+
+The claim above — "every server here was verified by running it" — was
+false, and the way it was false is the most embarrassing possible one.
+
+**No server in this repo could start.** Not one file called `mcp.run()`.
+Every `if __name__ == "__main__":` block printed a banner listing the
+tool names and exited, so a client launching the server over stdio got
+human-readable text where the JSON-RPC handshake belonged and reported
+the server as failed. Every install path documented below failed at step
+one, on every platform, for every user, the entire time this repo was
+public.
+
+The `--test` flag made it worse. It printed `✅ All tools are functional`
+unconditionally, without executing a single line of tool code. A
+hardcoded success string — in the repo whose entire thesis is that
+hardcoded success strings are the problem.
+
+And the "verify it yourself" snippet could not have caught any of it. It
+imported each module and counted registered tools, which is exactly the
+compiles-and-imports non-evidence the section above warns you not to
+accept. It passed every day the servers were unable to run.
+
+Six tools were also broken on every call, three of them silently:
+
+- `notes.export_notes` referenced an undefined variable, and the bare
+  `except:` around it turned the `NameError` into
+  `{"success": True, "count": 0}` — a confident empty answer no matter
+  how many notes were on disk. Its markdown branch was a stub that
+  returned an empty list.
+- `system_info.get_disk_info` and `get_network_info` misused the psutil
+  API and returned `success: False` on every call. `get_sensors` made
+  the same mistake but swallowed it, so it always reported success with
+  no readings. `get_timezone` failed on every machine.
+- `document_manager.organize_documents` filed any file matching no rule
+  into the *last rule's* folder instead of the default — and it moves
+  files, so that was silent and irreversible.
+
+Then, while writing the test suite that should have existed from the
+start, it caught one more that I had not found by reading the code:
+notes took their ID from a second-resolution timestamp, so two notes
+created in the same second got the same ID and **the second silently
+overwrote the first.** Data loss, in the tool whose one job is not
+losing what you wrote down. The clipboard server had already been fixed
+for this exact bug; notes never got the same fix.
+
+What changed, so this is checkable rather than another claim:
+
+- The `--test` flag is gone. There is a real `pytest` suite that calls
+  every tool and asserts on output, including write-then-read-back for
+  everything stateful and a `json.dumps()` check on every response.
+- A startup test launches each server as a subprocess and speaks
+  JSON-RPC to it. That is the test that would have caught all of this,
+  and the one the old structural check could not perform by design.
+- CI runs the suite on Linux, macOS and Windows across Python 3.10–3.13.
+- `organize_documents` now previews by default and needs an explicit
+  `dry_run=False` before it moves anything.
+- `requirements.txt` was unpinned at `mcp>=1.0.0`, and mcp 2.0 removed
+  `mcp.server.fastmcp` entirely — so by the end, a fresh
+  `pip install -r requirements.txt` failed at import before any of the
+  above could even be reached. Now pinned, and migrated to `MCPServer`.
+
+The lesson I actually take from this is narrower than "test your code."
+It is that I wrote a verification standard, believed I was applying it,
+and did not notice that my check tested the one property that could not
+fail. A test that cannot fail is worse than no test, because it spends
+your attention and returns false confidence. That is what the banner and
+the tool-count snippet both were.
+
 This matters more than usual right now. A lot of MCP servers are being
 generated fast and published unrun. Compiling, importing, and registering
 tools are *not* evidence a server works — all three passed on every one of
@@ -67,8 +136,10 @@ uptime, Python environment.
 
 > "How much disk space is left, and what's using the most memory?"
 
-*Verified: returns live values that change between calls and match
-`top`/`df`.* Pure stdlib + `psutil`.
+*Verified by `tests/test_system_info.py`: every tool is called and its
+output asserted against real values — a non-empty partition list with a
+positive `total`, real interface names with addresses, elapsed uptime —
+and every response is checked for JSON-serializability.* Needs `psutil`.
 
 ### `clipboard` — 12 tools
 
@@ -79,10 +150,12 @@ history, merge multiple clips, clean up whitespace, convert formats.
 > "Save that to my clipboard history as 'api-notes', then find the clip I
 > saved about the database schema."
 
-*Verified: round-trip write→read against the real system clipboard;
-history persisted to disk, searched, deleted, and cleared.* Uses
-`pbcopy`/`pbpaste` on macOS, PowerShell on Windows, `xclip`/`xsel` on
-Linux. Zero dependencies.
+*Verified by `tests/test_clipboard.py`: history is written, re-read after
+a fresh module load, searched, deleted and cleared. The system-clipboard
+round-trip runs where a clipboard exists and skips on headless machines
+rather than pretending to pass.* Uses `pbcopy`/`pbpaste` on macOS,
+PowerShell (`Get-Clipboard`/`Set-Clipboard`) on Windows, `xclip`/`xsel`
+on Linux. No dependencies beyond `mcp`.
 
 **Note:** this one was previously fake — it returned the string
 `"Sample clipboard text"` for every read. It has been rewritten.
@@ -94,19 +167,27 @@ tag, search, delete, import, and export.
 
 > "Make a note of these three decisions and tag it 'architecture'."
 
-*Verified: created notes, re-read them in a separate call, confirmed
-they persisted to disk.* Zero dependencies.
+*Verified by `tests/test_notes.py`: notes are created, re-read in a
+separate call, listed, searched, tagged and exported — with the tag and
+export assertions checking what came back off disk, not what the
+response echoed.* No dependencies beyond `mcp`.
 
-### `document-manager-server` — 6 tools
+### `document_manager` — 6 tools
 
 File management: metadata inspection, bulk organization by rules,
 archiving, listing with filters.
 
-> "Organize everything in ~/Downloads into folders by file type."
+> "Show me how you'd organize ~/Downloads by file type."
 
-*Verified: real metadata (size, timestamps, permissions) on real files;
-organize and archive operations produce actual results on disk.* Zero
-dependencies.
+**`organize_documents` moves files, so it previews by default.** It
+reports the moves it would make and changes nothing until you pass
+`dry_run=False`.
+
+*Verified by `tests/test_document_manager.py`: real metadata on real
+files, archives that exist and are non-empty, a rule matrix asserting
+that a file matching no rule lands in the default category, and a check
+that a dry run leaves the filesystem untouched.* No dependencies beyond
+`mcp`.
 
 ---
 
@@ -143,7 +224,7 @@ Register the ones you want. For **Claude Desktop**, edit
     },
     "document-manager": {
       "command": "python",
-      "args": ["/absolute/path/to/business-mcp-servers/servers/document-manager-server.py"]
+      "args": ["/absolute/path/to/business-mcp-servers/servers/document_manager.py"]
     }
   }
 }
@@ -162,12 +243,23 @@ claude mcp add clipboard -- python /absolute/path/to/servers/clipboard.py
 
 ## Where your data lives
 
-Servers that persist data write to `~/.local/share/business-mcp/` —
-never inside this repo, never to a hardcoded path.
+Servers that persist data write under `~/.local/share/business-mcp/`.
 
-| Server | Override with |
-|---|---|
-| `clipboard` | `CLIPBOARD_HISTORY_PATH` |
+| Server | Location | Override with |
+|---|---|---|
+| `clipboard` | `clipboard_history.json` | `CLIPBOARD_HISTORY_PATH` |
+| `notes` | `notes/` | `NOTES_STORE_PATH` |
+
+`document_manager` has no store of its own — it operates on the paths you
+give it, and writes a `<filename>.meta.json` sidecar next to a document
+when you attach tags. `system_info` is read-only.
+
+Until 2026-08-15 this section claimed both servers wrote under
+`~/.local/share/business-mcp/` and "never to a hardcoded path". That was
+true of `clipboard` and false of `notes`, which used a bare relative
+`notes_store` resolved against the process working directory — chosen by
+whatever launched the server, and easily this repo. It now matches the
+table.
 
 Nothing leaves your machine. No telemetry, no network calls, no analytics.
 
@@ -177,40 +269,53 @@ Nothing leaves your machine. No telemetry, no network calls, no analytics.
 
 Don't take my word for it — that's the entire point.
 
-**Structural check** (necessary, not sufficient):
-
 ```bash
-python - <<'PY'
-import importlib.util, pathlib, io, contextlib, asyncio
-for p in sorted(pathlib.Path("servers").glob("*.py")):
-    spec = importlib.util.spec_from_file_location(p.stem.replace("-","_"), p)
-    m = importlib.util.module_from_spec(spec)
-    with contextlib.redirect_stdout(io.StringIO()):
-        spec.loader.exec_module(m)
-    print(f"{p.name:28} {len(asyncio.run(m.mcp.list_tools()))} tools")
-PY
+pip install -r requirements-dev.txt
+pytest -q
 ```
 
-Expect `41 tools` across 4 servers.
+The suite calls every tool and asserts on real output. It never asserts
+on `success` alone, because `success: True` is exactly what a fabricated
+tool returns.
 
-**The check that actually matters** — call a tool and look at the output.
-For anything stateful, *write then read back*:
+**Check that the servers actually start**, which is the failure this repo
+shipped with:
+
+```bash
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}' \
+  | python servers/notes.py
+```
+
+You should get a JSON-RPC result. If you get a human-readable banner, or
+nothing, the server cannot talk to any MCP client — regardless of how
+many tools it registers.
+
+**The check that actually matters for any server, including ones you
+didn't write** — call a tool and look at the output. For anything
+stateful, *write then read back*:
 
 ```python
 m.create_note(title="test", content="hello")
 m.list_notes()      # must contain what you just wrote
 ```
 
-If step 2 comes back empty, the server isn't persisting. That was true of
-several of mine before I fixed them, and it's the single most useful test
-you can run against any MCP server — including ones you didn't write.
+If step 2 comes back empty, the server isn't persisting.
+
+A counting check — importing the modules and totalling registered tools —
+is worth running, but do not mistake it for evidence. This repo used one
+as its headline verification, and it reported a healthy `41 tools` across
+4 servers every day that not one of those servers could start.
 
 ---
 
 ## Requirements
 
-`mcp` for all servers, plus `psutil` for `system_info`. The other three
-are pure standard library.
+Python 3.10+. `mcp` for all servers, plus `psutil` for `system_info`.
+The other three use nothing beyond `mcp` and the standard library.
+
+`mcp` is pinned to `>=2.0,<3`. These servers use `MCPServer` from
+`mcp.server.mcpserver`; mcp 1.x shipped the same API as `FastMCP` under
+`mcp.server.fastmcp`, which 2.0 removed. If you are on mcp 1.x, upgrade.
 
 Linux users: `clipboard` needs `xclip` or `xsel` installed. macOS and
 Windows work out of the box.

@@ -40,6 +40,22 @@ def _store_dir() -> Path:
     return NOTES_STORE
 
 
+def _new_note_id(prefix: str) -> str:
+    """
+    Mint a note ID that is not already taken.
+
+    Second-resolution timestamps are not enough: two notes created in the
+    same second produced the same ID, and the second silently overwrote the
+    first. Microseconds make that vanishingly unlikely, and the existence
+    check makes it impossible.
+    """
+    store = _store_dir()
+    while True:
+        candidate = f"{prefix}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+        if not (store / f"{candidate}.json").exists():
+            return candidate
+
+
 def _notes_to_markdown(notes: list, include_meta: bool = True) -> str:
     """Render notes as a single markdown document."""
     blocks = []
@@ -113,7 +129,7 @@ def create_note(
         Note ID and creation confirmation
     """
     try:
-        note_id = f"note_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+        note_id = _new_note_id("note")
 
         note = {
             "id": note_id,
@@ -464,7 +480,7 @@ def import_note(content: str, title: str = None) -> dict:
         Import confirmation
     """
     try:
-        note_id = f"imported_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+        note_id = _new_note_id("imported")
 
         note = {
             "id": note_id,

@@ -6,8 +6,13 @@ venv/
 
 # Runtime data - servers default to ~/.local/share/business-mcp/,
 # this guards against an env var pointing them back into the repo.
+# notes_store/ is the old default, which resolved against the process
+# working directory and so could land here.
+notes_store/
+uploads/
 *.db
-*.pptx
-*.docx
+
+.pytest_cache/
+.ruff_cache/
 
 .DS_Store
