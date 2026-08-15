@@ -211,9 +211,21 @@ def save_to_history(text: str, label: str = None) -> dict:
     try:
         entries = _load_history()
         now = datetime.datetime.now()
-        # Include microseconds so rapid successive saves get unique ids
+        existing_ids = {e["id"] for e in entries}
+        # Microseconds alone are not enough: Windows' clock resolution is
+        # coarser than a microsecond in practice, so rapid successive saves
+        # collided on the same id and silently overwrote each other on
+        # re-save. A numeric suffix guarantees uniqueness without busy-
+        # waiting on the clock to tick over.
+        base_id = f"clip_{now.strftime('%Y%m%d%H%M%S%f')}"
+        entry_id = base_id
+        suffix = 0
+        while entry_id in existing_ids:
+            suffix += 1
+            entry_id = f"{base_id}_{suffix}"
+
         entry = {
-            "id": f"clip_{now.strftime('%Y%m%d%H%M%S%f')}",
+            "id": entry_id,
             "text": text,
             "label": label or "Untitled",
             "timestamp": now.isoformat(),

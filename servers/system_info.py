@@ -78,7 +78,10 @@ def get_cpu_info() -> dict:
         # Sample percpu once and reuse: calling cpu_percent() per core meant
         # N full samples per request, and cpu_freq() was called twice.
         per_core = psutil.cpu_percent(percpu=True, interval=None)
-        freq = psutil.cpu_freq()
+        # cpu_freq() doesn't exist on every platform (some macOS runners,
+        # containers without the sysfs it reads on Linux); hasattr guards
+        # the attribute, and it can also legitimately return None.
+        freq = psutil.cpu_freq() if hasattr(psutil, "cpu_freq") else None
 
         return {
             "success": True,
@@ -247,21 +250,28 @@ def get_processes(limit: int = 10) -> dict:
         Process list
     """
     try:
-        return {
-            "success": True,
-            "count": len(psutil.pids()),
-            "processes": [
-                {
-                    "pid": p.pid,
-                    "name": p.name(),
-                    "status": p.status(),
-                    "cpu_percent": p.cpu_percent(interval=None),
-                    "memory_percent": p.memory_percent(),
-                }
-                for p in psutil.process_iter()
-                if p.is_running()
-            ][:limit],
-        }
+        processes = []
+        for p in psutil.process_iter():
+            if len(processes) >= limit:
+                break
+            try:
+                if not p.is_running():
+                    continue
+                processes.append(
+                    {
+                        "pid": p.pid,
+                        "name": p.name(),
+                        "status": p.status(),
+                        "cpu_percent": p.cpu_percent(interval=None),
+                        "memory_percent": p.memory_percent(),
+                    }
+                )
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                # A single protected process (e.g. macOS's pid-0
+                # kernel_task) must not take down the whole listing.
+                continue
+
+        return {"success": True, "count": len(psutil.pids()), "processes": processes}
     except Exception as e:
         return {"success": False, "error": str(e)}
 

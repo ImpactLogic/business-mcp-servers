@@ -60,9 +60,13 @@ def test_network_info_reports_interfaces(system_info):
 
     assert result["interfaces"], "no interfaces reported"
     names = [i["name"] for i in result["interfaces"]]
-    assert any(n.startswith(("lo", "en", "eth", "Loopback")) for n in names), names
+    assert any(n.lower().startswith(("lo", "en", "eth")) for n in names), names
 
-    loopback = next(i for i in result["interfaces"] if i["name"].startswith("lo"))
+    # Windows names its loopback "Loopback Pseudo-Interface 1"; macOS/Linux
+    # use "lo0"/"lo". Match case-insensitively rather than assuming "lo".
+    loopback = next(
+        i for i in result["interfaces"] if i["name"].lower().startswith("lo")
+    )
     assert loopback["addresses"], "loopback reported no addresses"
     assert loopback["status"] in ("up", "down")
 

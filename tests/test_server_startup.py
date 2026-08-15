@@ -12,6 +12,7 @@ Speaking protocol over stdio is.
 """
 
 import json
+import os
 import subprocess
 import sys
 
@@ -35,19 +36,22 @@ INITIALIZE = {
 
 def _initialize(name, tmp_path):
     """Start a server over stdio and return its parsed initialize response."""
+    # Extend the real environment rather than replacing it: a hardcoded
+    # Unix-style PATH here broke Python's own import machinery on Windows
+    # (SystemRoot and friends are required for the mcp package to import),
+    # so every server "failed to start" for a reason that had nothing to do
+    # with the server code.
+    env = dict(os.environ)
+    env["HOME"] = str(tmp_path)
+    env["NOTES_STORE_PATH"] = str(tmp_path / "notes")
+    env["CLIPBOARD_HISTORY_PATH"] = str(tmp_path / "clip.json")
     process = subprocess.run(
         [sys.executable, str(SERVERS / f"{name}.py")],
         input=json.dumps(INITIALIZE) + "\n",
         capture_output=True,
         text=True,
         timeout=60,
-        # Keep any server that writes state pointed at a scratch directory.
-        env={
-            "PATH": "/usr/bin:/bin",
-            "HOME": str(tmp_path),
-            "NOTES_STORE_PATH": str(tmp_path / "notes"),
-            "CLIPBOARD_HISTORY_PATH": str(tmp_path / "clip.json"),
-        },
+        env=env,
         cwd=tmp_path,
     )
     return process
