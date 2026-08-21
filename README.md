@@ -322,6 +322,17 @@ Windows work out of the box.
 
 ---
 
+## Related paid work
+
+These servers are free and MIT licensed, with no upsell path attached.
+
+I also sell a few Claude skills — packaged instruction files for
+business tasks like budgeting, invoicing, and source-file security
+scanning — at [impactlogic.gumroad.com](https://impactlogic.gumroad.com/?utm_source=github&utm_medium=readme&utm_campaign=repo-bridge).
+They're independent of these servers and don't require them.
+
+If you only ever use the free servers, that's genuinely fine.
+
 ## Contributing
 
 Bug reports welcome — especially **"this tool returns success but doesn't
